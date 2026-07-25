@@ -145,3 +145,27 @@ details summary {
   color: #2563eb;
   font-size: 0.875rem;
 }
+
+.btn-edit {
+  background: #2563eb;
+}
+
+.btn-edit:hover {
+  background: #1d4ed8;
+}
+
+.btn-sample {
+  background: #10b981;
+}
+
+.btn-sample:hover {
+  background: #059669;
+}
+
+.btn-delete {
+  background: #ef4444;
+}
+
+.btn-delete:hover {
+  background: #dc2626;
+}

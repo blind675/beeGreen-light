@@ -8,13 +8,15 @@ datasource db {
 }
 
 model Project {
-  id        String   @id @default(cuid())
-  publicId  String   @unique
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  sensors   Sensor[]
-  records   Record[]
+  id          String   @id @default(cuid())
+  publicId    String   @unique
+  name        String
+  acceptImage Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  sensors     Sensor[]
+  records     Record[]
+  images      Image[]
 }
 
 model Sensor {
@@ -37,4 +39,15 @@ model Record {
 
   @@index([projectId, sensorName, timestamp])
   @@index([deviceId])
+}
+
+model Image {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  data      String
+  mime      String   @default("image/jpeg")
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
 }

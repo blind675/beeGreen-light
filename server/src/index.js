@@ -44,6 +44,12 @@ async function uniquePublicId(name) {
   throw new Error('Could not generate a unique project ID');
 }
 
+function detectMime(base64) {
+  if (base64.startsWith('iVBORw0KGgo')) return 'image/png';
+  if (base64.startsWith('/9j/')) return 'image/jpeg';
+  return 'image/jpeg';
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
@@ -64,7 +70,7 @@ app.get('/api/projects/:publicId', async (req, res, next) => {
   try {
     const project = await prisma.project.findUnique({
       where: { publicId: req.params.publicId },
-      include: { sensors: true },
+      include: { sensors: true, images: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(project);
@@ -104,14 +110,14 @@ app.get('/api/projects/:publicId/records', async (req, res, next) => {
 
 app.post('/api/projects/:publicId/records', async (req, res, next) => {
   try {
-    const { deviceID, readings } = req.body || {};
+    const { deviceID, readings, image } = req.body || {};
     if (!deviceID || !Array.isArray(readings) || readings.length === 0) {
       return res.status(400).json({ error: 'deviceID and readings[] are required' });
     }
 
     const project = await prisma.project.findUnique({
       where: { publicId: req.params.publicId },
-      select: { id: true },
+      select: { id: true, acceptImage: true },
     });
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -135,6 +141,20 @@ app.post('/api/projects/:publicId/records', async (req, res, next) => {
     }
 
     const result = await prisma.record.createMany({ data });
+
+    if (image && typeof image === 'string' && project.acceptImage) {
+      const clean = image.replace(/\s/g, '');
+      if (/^[A-Za-z0-9+/]+={0,2}$/.test(clean) && clean.length % 4 === 0) {
+        await prisma.image.create({
+          data: {
+            projectId: project.id,
+            data: clean,
+            mime: detectMime(clean),
+          },
+        });
+      }
+    }
+
     res.json({ created: result.count });
   } catch (err) {
     next(err);
@@ -163,11 +183,12 @@ app.get('/api/admin/projects', requireAdmin, async (req, res, next) => {
 
 app.post('/api/admin/projects', requireAdmin, async (req, res, next) => {
   try {
-    const { name, sensorNames } = req.body || {};
+    const { name, sensorNames, acceptImage } = req.body || {};
 
     console.log("================================");
     console.log("name", name);
     console.log("sensorNames", sensorNames);
+    console.log("acceptImage", acceptImage);
     console.log("================================");
 
     if (!name || typeof name !== 'string') {
@@ -185,7 +206,7 @@ app.post('/api/admin/projects', requireAdmin, async (req, res, next) => {
 
     const project = await prisma.$transaction(async (tx) => {
       const p = await tx.project.create({
-        data: { publicId, name: name.trim() },
+        data: { publicId, name: name.trim(), acceptImage: Boolean(acceptImage) },
       });
       if (sensorList.length > 0) {
         await tx.sensor.createMany({
@@ -200,6 +221,49 @@ app.post('/api/admin/projects', requireAdmin, async (req, res, next) => {
     });
 
     res.status(201).json(project);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put('/api/admin/projects/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const { name, acceptImage, sensorNames } = req.body || {};
+    const projectData = {};
+
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ error: 'name must be a non-empty string' });
+      }
+      projectData.name = name.trim();
+    }
+    if (acceptImage !== undefined) {
+      projectData.acceptImage = Boolean(acceptImage);
+    }
+
+    const replaceSensors = Array.isArray(sensorNames);
+    const updated = await prisma.$transaction(async (tx) => {
+      if (replaceSensors) {
+        const names = sensorNames
+          .filter((n) => typeof n === 'string')
+          .map((n) => n.trim())
+          .filter(Boolean);
+        await tx.sensor.deleteMany({ where: { projectId: req.params.id } });
+        if (names.length > 0) {
+          await tx.sensor.createMany({
+            data: names.map((n) => ({ projectId: req.params.id, name: n })),
+            skipDuplicates: true,
+          });
+        }
+      }
+      return tx.project.update({
+        where: { id: req.params.id },
+        data: projectData,
+        include: { sensors: true },
+      });
+    });
+
+    res.json(updated);
   } catch (err) {
     next(err);
   }

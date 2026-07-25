@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "npm start",
+    "startCommand": "npm run db:migrate && npm start",
     "healthcheckPath": "/api/health"
   }
 }

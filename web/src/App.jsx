@@ -56,10 +56,16 @@ function Project() {
   const [records, setRecords] = useState([]);
 
   useEffect(() => {
-    api(`/projects/${publicId}`).then(setProject).catch(console.error);
-    api(`/projects/${publicId}/records?limit=2000`)
-      .then(setRecords)
-      .catch(console.error);
+    const load = () => {
+      api(`/projects/${publicId}`).then(setProject).catch(console.error);
+      api(`/projects/${publicId}/records?limit=2000`)
+        .then(setRecords)
+        .catch(console.error);
+    };
+
+    load();
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
   }, [publicId]);
 
   if (!project) return <div className="container">Loading...</div>;
@@ -79,6 +85,16 @@ function Project() {
       <Link to="/">&larr; Back to projects</Link>
       <h1>{project.name}</h1>
       <p className="meta">{project.publicId}</p>
+
+      {project.acceptImage && project.images?.length > 0 && (
+        <div className="image-block">
+          <img
+            src={`data:${project.images[0].mime};base64,${project.images[0].data}`}
+            alt="Latest device snapshot"
+            style={{ maxWidth: '100%', borderRadius: '8px', marginBottom: '1rem' }}
+          />
+        </div>
+      )}
 
       {project.sensors.length === 0 && (
         <p>No sensors configured yet. Go to /admin to add some.</p>
@@ -114,6 +130,8 @@ function Project() {
   );
 }
 
+const EXAMPLE_IMAGE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 function Admin() {
   const [password, setPassword] = useState(
     localStorage.getItem('adminPw') || ''
@@ -122,6 +140,11 @@ function Admin() {
   const [projects, setProjects] = useState([]);
   const [name, setName] = useState('');
   const [sensorsText, setSensorsText] = useState('');
+  const [acceptImage, setAcceptImage] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editAcceptImage, setEditAcceptImage] = useState(false);
+  const [drafts, setDrafts] = useState({});
 
   const authHeaders = { 'X-Admin-Password': password };
 
@@ -148,11 +171,6 @@ function Admin() {
   const createProject = async (e) => {
     e.preventDefault();
 
-    console.log("================================");
-    console.log("name", name);
-    console.log("sensorsText", sensorsText);
-    console.log("================================");
-
     const sensorNames = sensorsText
       .split(',')
       .map((s) => s.trim())
@@ -160,16 +178,14 @@ function Admin() {
     try {
       await api('/admin/projects', {
         method: 'POST',
-        body: JSON.stringify({ name, sensorNames }),
+        body: JSON.stringify({ name, sensorNames, acceptImage }),
         headers: authHeaders,
       });
       setName('');
       setSensorsText('');
+      setAcceptImage(false);
       loadProjects();
     } catch (err) {
-      console.log("================================");
-      console.log("err", err);
-      console.log("================================");
       alert(err.message);
     }
   };
@@ -193,6 +209,84 @@ function Admin() {
     } catch (err) {
       alert(err.message);
     }
+  };
+
+  const startEdit = (p) => {
+    setEditingId(p.id);
+    setEditName(p.name);
+    setEditAcceptImage(p.acceptImage);
+  };
+
+  const saveEdit = async (id) => {
+    try {
+      await api(`/admin/projects/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: editName, acceptImage: editAcceptImage }),
+        headers: authHeaders,
+      });
+      setEditingId(null);
+      loadProjects();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const buildExamplePayload = (p) => ({
+    deviceID: p.publicId,
+    readings: p.sensors.length
+      ? p.sensors.slice(0, 2).map((s, i) => ({
+        sensorName: s.name,
+        value: i === 0 ? 23.5 : 60,
+      }))
+      : [
+        { sensorName: 'temperature', value: 23.5 },
+        { sensorName: 'humidity', value: 60 },
+      ],
+    ...(p.acceptImage ? { image: EXAMPLE_IMAGE } : {}),
+  });
+
+  const getDefaultDraft = (p) => JSON.stringify(buildExamplePayload(p), null, 2);
+
+  const postExample = async (p) => {
+    const draft = drafts[p.id] ?? getDefaultDraft(p);
+    let payload;
+    try {
+      payload = JSON.parse(draft);
+    } catch (err) {
+      alert('Invalid JSON: ' + err.message);
+      return;
+    }
+    try {
+      await api(`/projects/${p.publicId}/records`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      alert('Payload sent');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleImageUpload = (e, p) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      setDrafts((prev) => {
+        const draft = prev[p.id] ?? getDefaultDraft(p);
+        try {
+          const payload = JSON.parse(draft);
+          payload.image = base64;
+          return { ...prev, [p.id]: JSON.stringify(payload, null, 2) };
+        } catch {
+          alert('Cannot update image: draft JSON is invalid');
+          return prev;
+        }
+      });
+    };
+    reader.readAsDataURL(file);
   };
 
   if (!logged) {
@@ -229,6 +323,14 @@ function Admin() {
           value={sensorsText}
           onChange={(e) => setSensorsText(e.target.value)}
         />
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={acceptImage}
+            onChange={(e) => setAcceptImage(e.target.checked)}
+          />
+          Accept image
+        </label>
         <button>Create project</button>
       </form>
 
@@ -236,44 +338,87 @@ function Admin() {
       <ul className="list">
         {projects.map((p) => (
           <li key={p.id} className="project-item">
-            <div>
-              <strong>{p.name}</strong>
-              <br />
-              <small>
-                <b>Project ID:</b> <code>{p.publicId}</code>
-              </small>
-              <br />
-              <small>
-                Sensors: {p.sensors.map((s) => s.name).join(', ') || 'none'}
-              </small>
-              <details style={{ marginTop: '8px' }}>
-                <summary>Example device payload</summary>
-                <p style={{ marginTop: '8px' }}>
-                  <b>Push URL:</b>{' '}
-                  <code>{`${window.location.origin}/api/projects/${p.publicId}/records`}</code>
-                </p>
-                <pre>
-                  {JSON.stringify(
-                    {
-                      deviceID: p.publicId,
-                      readings: p.sensors.length
-                        ? p.sensors.slice(0, 2).map((s, i) => ({
-                          sensorName: s.name,
-                          value: i === 0 ? 23.5 : 60,
-                        }))
-                        : [
-                          { sensorName: 'temperature', value: 23.5 },
-                          { sensorName: 'humidity', value: 60 },
-                        ],
-                    },
-                    null,
-                    2
-                  )}
-                </pre>
-              </details>
-            </div>
-            <button onClick={() => generateSampleData(p.id)}>Sample data</button>
-            <button onClick={() => deleteProject(p.id)}>Delete</button>
+            {editingId === p.id ? (
+              <>
+                <div style={{ flex: 1 }}>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    style={{ marginBottom: '8px' }}
+                  />
+                  <br />
+                  <label style={{ display: 'block', marginBottom: '8px' }}>
+                    <input
+                      type="checkbox"
+                      checked={editAcceptImage}
+                      onChange={(e) => setEditAcceptImage(e.target.checked)}
+                    />
+                    Accept image
+                  </label>
+                </div>
+                <div>
+                  <button onClick={() => saveEdit(p.id)}>Save</button>
+                  <button onClick={() => setEditingId(null)}>Cancel</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ flex: 1 }}>
+                  <strong>{p.name}</strong>
+                  <br />
+                  <small>
+                    <b>Project ID:</b> <code>{p.publicId}</code>
+                  </small>
+                  <br />
+                  <small>
+                    Sensors: {p.sensors.map((s) => s.name).join(', ') || 'none'}
+                  </small>
+                  <br />
+                  <small>Accept image: {p.acceptImage ? 'yes' : 'no'}</small>
+                  <details style={{ marginTop: '8px' }}>
+                    <summary>Example device payload</summary>
+                    <p style={{ marginTop: '8px' }}>
+                      <b>Push URL:</b>{' '}
+                      <code>{`${window.location.origin}/api/projects/${p.publicId}/records`}</code>
+                    </p>
+                    <textarea
+                      style={{ width: '100%', minHeight: '140px', fontFamily: 'monospace' }}
+                      value={drafts[p.id] ?? getDefaultDraft(p)}
+                      onChange={(e) =>
+                        setDrafts((d) => ({ ...d, [p.id]: e.target.value }))
+                      }
+                    />
+                    {p.acceptImage && (
+                      <>
+                        <input
+                          type="file"
+                          id={`img-${p.id}`}
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          onChange={(e) => handleImageUpload(e, p)}
+                        />
+                        <button onClick={() => document.getElementById(`img-${p.id}`)?.click()}>
+                          Upload image
+                        </button>
+                      </>
+                    )}
+                    <button onClick={() => postExample(p)}>Send example</button>
+                  </details>
+                </div>
+                <div style={{ alignSelf: 'flex-start', marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button className="btn-edit" onClick={() => startEdit(p)}>
+                    ✏️ Edit
+                  </button>
+                  <button className="btn-sample" onClick={() => generateSampleData(p.id)}>
+                    📊 Sample data
+                  </button>
+                  <button className="btn-delete" onClick={() => deleteProject(p.id)}>
+                    🗑 Delete
+                  </button>
+                </div>
+              </>
+            )}
           </li>
         ))}
       </ul>
