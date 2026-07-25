@@ -117,9 +117,23 @@ app.post('/api/projects/:publicId/records', async (req, res, next) => {
 
     const project = await prisma.project.findUnique({
       where: { publicId: req.params.publicId },
-      select: { id: true, acceptImage: true },
+      include: { sensors: true },
     });
     if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const sensorByName = new Map(
+      project.sensors.map((s) => [s.name, s])
+    );
+
+    const latestRecords = await prisma.record.findMany({
+      where: { projectId: project.id },
+      orderBy: { timestamp: 'desc' },
+      distinct: ['sensorName'],
+      select: { sensorName: true, value: true },
+    });
+    const lastValueBySensor = new Map(
+      latestRecords.map((r) => [r.sensorName, r.value])
+    );
 
     const data = readings
       .filter(
@@ -129,12 +143,25 @@ app.post('/api/projects/:publicId/records', async (req, res, next) => {
           typeof r.value === 'number' &&
           !Number.isNaN(r.value)
       )
-      .map((r) => ({
-        projectId: project.id,
-        deviceId: String(deviceID),
-        sensorName: r.sensorName.trim(),
-        value: r.value,
-      }));
+      .map((r) => {
+        const sensorName = r.sensorName.trim();
+        const sensor = sensorByName.get(sensorName);
+        let value = r.value;
+
+        if (sensor && (value < sensor.minValue || value > sensor.maxValue)) {
+          const last = lastValueBySensor.get(sensorName);
+          if (last === undefined) return null;
+          value = last;
+        }
+
+        return {
+          projectId: project.id,
+          deviceId: String(deviceID),
+          sensorName,
+          value,
+        };
+      })
+      .filter(Boolean);
 
     if (data.length === 0) {
       return res.status(400).json({ error: 'No valid readings' });
@@ -183,23 +210,21 @@ app.get('/api/admin/projects', requireAdmin, async (req, res, next) => {
 
 app.post('/api/admin/projects', requireAdmin, async (req, res, next) => {
   try {
-    const { name, sensorNames, acceptImage } = req.body || {};
-
-    console.log("================================");
-    console.log("name", name);
-    console.log("sensorNames", sensorNames);
-    console.log("acceptImage", acceptImage);
-    console.log("================================");
+    const { name, sensors, acceptImage } = req.body || {};
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'name is required' });
     }
 
-    const sensorList = Array.isArray(sensorNames)
-      ? sensorNames
-        .filter((n) => typeof n === 'string')
-        .map((n) => n.trim())
-        .filter(Boolean)
+    const sensorList = Array.isArray(sensors)
+      ? sensors
+        .filter((s) => s && typeof s.name === 'string')
+        .map((s) => ({
+          name: s.name.trim(),
+          minValue: typeof s.minValue === 'number' ? s.minValue : 0,
+          maxValue: typeof s.maxValue === 'number' ? s.maxValue : 1024,
+        }))
+        .filter((s) => s.name)
       : [];
 
     const publicId = await uniquePublicId(name);
@@ -210,7 +235,7 @@ app.post('/api/admin/projects', requireAdmin, async (req, res, next) => {
       });
       if (sensorList.length > 0) {
         await tx.sensor.createMany({
-          data: sensorList.map((n) => ({ projectId: p.id, name: n })),
+          data: sensorList.map((s) => ({ projectId: p.id, ...s })),
           skipDuplicates: true,
         });
       }
@@ -228,7 +253,7 @@ app.post('/api/admin/projects', requireAdmin, async (req, res, next) => {
 
 app.put('/api/admin/projects/:id', requireAdmin, async (req, res, next) => {
   try {
-    const { name, acceptImage, sensorNames } = req.body || {};
+    const { name, acceptImage, sensors } = req.body || {};
     const projectData = {};
 
     if (name !== undefined) {
@@ -241,17 +266,21 @@ app.put('/api/admin/projects/:id', requireAdmin, async (req, res, next) => {
       projectData.acceptImage = Boolean(acceptImage);
     }
 
-    const replaceSensors = Array.isArray(sensorNames);
+    const replaceSensors = Array.isArray(sensors);
     const updated = await prisma.$transaction(async (tx) => {
       if (replaceSensors) {
-        const names = sensorNames
-          .filter((n) => typeof n === 'string')
-          .map((n) => n.trim())
-          .filter(Boolean);
+        const sensorList = sensors
+          .filter((s) => s && typeof s.name === 'string')
+          .map((s) => ({
+            name: s.name.trim(),
+            minValue: typeof s.minValue === 'number' ? s.minValue : 0,
+            maxValue: typeof s.maxValue === 'number' ? s.maxValue : 1024,
+          }))
+          .filter((s) => s.name);
         await tx.sensor.deleteMany({ where: { projectId: req.params.id } });
-        if (names.length > 0) {
+        if (sensorList.length > 0) {
           await tx.sensor.createMany({
-            data: names.map((n) => ({ projectId: req.params.id, name: n })),
+            data: sensorList.map((s) => ({ projectId: req.params.id, ...s })),
             skipDuplicates: true,
           });
         }
@@ -280,12 +309,17 @@ app.delete('/api/admin/projects/:id', requireAdmin, async (req, res, next) => {
 
 app.post('/api/admin/projects/:id/sensors', requireAdmin, async (req, res, next) => {
   try {
-    const { name } = req.body || {};
+    const { name, minValue, maxValue } = req.body || {};
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'name is required' });
     }
     const sensor = await prisma.sensor.create({
-      data: { projectId: req.params.id, name: name.trim() },
+      data: {
+        projectId: req.params.id,
+        name: name.trim(),
+        minValue: typeof minValue === 'number' ? minValue : 0,
+        maxValue: typeof maxValue === 'number' ? maxValue : 1024,
+      },
     });
     res.status(201).json(sensor);
   } catch (err) {

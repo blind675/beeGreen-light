@@ -139,12 +139,27 @@ function Admin() {
   const [logged, setLogged] = useState(false);
   const [projects, setProjects] = useState([]);
   const [name, setName] = useState('');
-  const [sensorsText, setSensorsText] = useState('');
+  const [sensors, setSensors] = useState([{ name: '', minValue: 0, maxValue: 1024 }]);
   const [acceptImage, setAcceptImage] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editAcceptImage, setEditAcceptImage] = useState(false);
+  const [editSensors, setEditSensors] = useState([]);
   const [drafts, setDrafts] = useState({});
+
+  const defaultSensor = () => ({ name: '', minValue: 0, maxValue: 1024 });
+
+  const addSensor = () => setSensors((prev) => [...prev, defaultSensor()]);
+  const updateSensor = (index, field, value) =>
+    setSensors((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)));
+  const removeSensor = (index) =>
+    setSensors((prev) => prev.filter((_, i) => i !== index));
+
+  const addEditSensor = () => setEditSensors((prev) => [...prev, defaultSensor()]);
+  const updateEditSensor = (index, field, value) =>
+    setEditSensors((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)));
+  const removeEditSensor = (index) =>
+    setEditSensors((prev) => prev.filter((_, i) => i !== index));
 
   const authHeaders = { 'X-Admin-Password': password };
 
@@ -171,18 +186,21 @@ function Admin() {
   const createProject = async (e) => {
     e.preventDefault();
 
-    const sensorNames = sensorsText
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const sensorList = sensors
+      .filter((s) => s.name.trim())
+      .map((s) => ({
+        name: s.name.trim(),
+        minValue: Number(s.minValue) || 0,
+        maxValue: Number(s.maxValue) || 1024,
+      }));
     try {
       await api('/admin/projects', {
         method: 'POST',
-        body: JSON.stringify({ name, sensorNames, acceptImage }),
+        body: JSON.stringify({ name, sensors: sensorList, acceptImage }),
         headers: authHeaders,
       });
       setName('');
-      setSensorsText('');
+      setSensors([defaultSensor()]);
       setAcceptImage(false);
       loadProjects();
     } catch (err) {
@@ -215,16 +233,25 @@ function Admin() {
     setEditingId(p.id);
     setEditName(p.name);
     setEditAcceptImage(p.acceptImage);
+    setEditSensors(p.sensors.length > 0 ? p.sensors : [defaultSensor()]);
   };
 
   const saveEdit = async (id) => {
+    const sensorList = editSensors
+      .filter((s) => s.name.trim())
+      .map((s) => ({
+        name: s.name.trim(),
+        minValue: Number(s.minValue) || 0,
+        maxValue: Number(s.maxValue) || 1024,
+      }));
     try {
       await api(`/admin/projects/${id}`, {
         method: 'PUT',
-        body: JSON.stringify({ name: editName, acceptImage: editAcceptImage }),
+        body: JSON.stringify({ name: editName, acceptImage: editAcceptImage, sensors: sensorList }),
         headers: authHeaders,
       });
       setEditingId(null);
+      setEditSensors([]);
       loadProjects();
     } catch (err) {
       alert(err.message);
@@ -330,12 +357,36 @@ function Admin() {
           onChange={(e) => setName(e.target.value)}
           required
         />
-        <input
-          type="text"
-          placeholder="Sensors, comma separated"
-          value={sensorsText}
-          onChange={(e) => setSensorsText(e.target.value)}
-        />
+        <div style={{ width: '100%' }}>
+          <h3 style={{ fontSize: '1rem', margin: '0 0 8px' }}>Sensors</h3>
+          {sensors.map((s, i) => (
+            <div key={i} style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                placeholder="Sensor name"
+                value={s.name}
+                onChange={(e) => updateSensor(i, 'name', e.target.value)}
+                style={{ flex: 1, minWidth: '120px' }}
+              />
+              <input
+                type="number"
+                placeholder="Min"
+                value={s.minValue}
+                onChange={(e) => updateSensor(i, 'minValue', Number(e.target.value))}
+                style={{ width: '90px', minWidth: '90px' }}
+              />
+              <input
+                type="number"
+                placeholder="Max"
+                value={s.maxValue}
+                onChange={(e) => updateSensor(i, 'maxValue', Number(e.target.value))}
+                style={{ width: '90px', minWidth: '90px' }}
+              />
+              <button type="button" onClick={() => removeSensor(i)}>Remove</button>
+            </div>
+          ))}
+          <button type="button" onClick={addSensor}>Add sensor</button>
+        </div>
         <label className="checkbox">
           <input
             type="checkbox"
@@ -369,6 +420,34 @@ function Admin() {
                     />
                     Accept image
                   </label>
+                  <h4 style={{ margin: '8px 0 4px', fontSize: '0.9rem' }}>Sensors</h4>
+                  {editSensors.map((s, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '8px', marginBottom: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        placeholder="Sensor name"
+                        value={s.name}
+                        onChange={(e) => updateEditSensor(i, 'name', e.target.value)}
+                        style={{ flex: 1, minWidth: '120px' }}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Min"
+                        value={s.minValue}
+                        onChange={(e) => updateEditSensor(i, 'minValue', Number(e.target.value))}
+                        style={{ width: '80px', minWidth: '80px' }}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Max"
+                        value={s.maxValue}
+                        onChange={(e) => updateEditSensor(i, 'maxValue', Number(e.target.value))}
+                        style={{ width: '80px', minWidth: '80px' }}
+                      />
+                      <button type="button" onClick={() => removeEditSensor(i)}>Remove</button>
+                    </div>
+                  ))}
+                  <button type="button" onClick={addEditSensor}>Add sensor</button>
                 </div>
                 <div>
                   <button onClick={() => saveEdit(p.id)}>Save</button>
@@ -385,7 +464,7 @@ function Admin() {
                   </small>
                   <br />
                   <small>
-                    Sensors: {p.sensors.map((s) => s.name).join(', ') || 'none'}
+                    Sensors: {p.sensors.map((s) => `${s.name} (${s.minValue}-${s.maxValue})`).join(', ') || 'none'}
                   </small>
                   <br />
                   <small>Accept image: {p.acceptImage ? 'yes' : 'no'}</small>
@@ -444,6 +523,7 @@ function App() {
     <div>
       <nav className="nav">
         <Link to="/" className="brand">
+          <img src="/bee-mascot.png" alt="Bee Green mascot" className="logo" />
           BeeGreen
         </Link>
         <Link to="/admin">Admin</Link>
