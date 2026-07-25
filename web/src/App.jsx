@@ -91,7 +91,7 @@ function Project() {
           <img
             src={`data:${project.images[0].mime};base64,${project.images[0].data}`}
             alt="Latest device snapshot"
-            style={{ maxWidth: '100%', borderRadius: '8px', marginBottom: '1rem' }}
+            style={{ width: '500px', height: '500px', objectFit: 'contain', borderRadius: '8px', marginBottom: '1rem' }}
           />
         </div>
       )}
@@ -118,7 +118,7 @@ function Project() {
                 <Line
                   type="monotone"
                   dataKey="value"
-                  stroke="#2563eb"
+                  stroke="#146720"
                   dot={false}
                 />
               </LineChart>
@@ -273,18 +273,31 @@ function Admin() {
     e.target.value = '';
     const reader = new FileReader();
     reader.onload = () => {
-      const base64 = reader.result.split(',')[1];
-      setDrafts((prev) => {
-        const draft = prev[p.id] ?? getDefaultDraft(p);
-        try {
-          const payload = JSON.parse(draft);
-          payload.image = base64;
-          return { ...prev, [p.id]: JSON.stringify(payload, null, 2) };
-        } catch {
-          alert('Cannot update image: draft JSON is invalid');
-          return prev;
-        }
-      });
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, 500 / img.width, 500 / img.height);
+        const width = Math.round(img.width * scale);
+        const height = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        const base64 = dataUrl.split(',')[1];
+        setDrafts((prev) => {
+          const draft = prev[p.id] ?? getDefaultDraft(p);
+          try {
+            const payload = JSON.parse(draft);
+            payload.image = base64;
+            return { ...prev, [p.id]: JSON.stringify(payload, null, 2) };
+          } catch {
+            alert('Cannot update image: draft JSON is invalid');
+            return prev;
+          }
+        });
+      };
+      img.src = reader.result;
     };
     reader.readAsDataURL(file);
   };
